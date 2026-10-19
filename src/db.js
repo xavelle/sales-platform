@@ -106,4 +106,13 @@ function nextOrderNo() {
   return 'XV-' + n;
 }
 
-module.exports = { db, getSetting, setSetting, findOrCreateCustomer, findOrCreateConversation, addMessage, getHistory, nextOrderNo };
+// Adjust stock when an order is placed (+restored on cancel). Matches items to products by name.
+function adjustStockForItems(items, sign) {
+  for (const it of items || []) {
+    if (!it.name) continue;
+    const p = db.prepare('SELECT * FROM products WHERE name = ?').get(it.name);
+    if (p) db.prepare('UPDATE products SET stock = MAX(0, stock + ?) WHERE id = ?').run(sign * (it.qty || 1), p.id);
+  }
+}
+
+module.exports = { db, getSetting, setSetting, findOrCreateCustomer, findOrCreateConversation, addMessage, getHistory, nextOrderNo, adjustStockForItems };
