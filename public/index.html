@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Platform - Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">◈ Sales<span>Platform</span></div>
+    <nav>
+      <button class="nav-btn active" data-tab="inbox">💬 Inbox <span id="unreadBadge" class="badge hidden"></span></button>
+      <button class="nav-btn" data-tab="orders">📦 Orders</button>
+      <button class="nav-btn" data-tab="products">👗 Products</button>
+      <button class="nav-btn" data-tab="broadcast">📢 Broadcast</button>
+      <button class="nav-btn" data-tab="aisetu">🧠 AI Setup</button>
+      <button class="nav-btn" data-tab="analytics">📊 Analytics</button>
+    </nav>
+    <div class="channel-status">
+      <div>🌐 Website <span class="on">●</span></div>
+      <div>💬 Messenger <span class="on">●</span></div>
+      <div>📱 WhatsApp <span class="off">○ soon</span></div>
+    </div>
+  </aside>
+  <main>
+    <section id="tab-inbox" class="tab active">
+      <div class="inbox-wrap">
+        <div class="conv-list" id="convList"></div>
+        <div class="chat-pane">
+          <div class="chat-header" id="chatHeader">Select a conversation</div>
+          <div class="chat-msgs" id="chatMsgs"></div>
+          <div class="chat-input hidden" id="chatInput">
+            <label class="ai-toggle"><input type="checkbox" id="aiToggle"> AI auto-reply</label>
+            <div class="row">
+              <input id="replyText" placeholder="Type a reply...">
+              <button onclick="sendReply()">Send</button>
+              <button class="call-btn" onclick="tapToCall()" title="Call customer">📞</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section id="tab-orders" class="tab">
+      <h2>Orders</h2>
+      <table class="tbl"><thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody id="orderRows"></tbody></table>
+    </section>
+    <section id="tab-products" class="tab">
+      <h2>Products</h2>
+      <div class="form-row">
+        <input id="pName" placeholder="Name"><input id="pPrice" type="number" placeholder="Price ৳">
+        <input id="pSizes" placeholder="Sizes (S,M,L)"><input id="pStock" type="number" placeholder="Stock">
+        <input id="pDesc" placeholder="Description"><button onclick="addProduct()">Add</button>
+      </div>
+      <table class="tbl"><thead><tr><th>Name</th><th>Price</th><th>Sizes</th><th>Stock</th><th></th></tr></thead>
+      <tbody id="prodRows"></tbody></table>
+    </section>
+    <section id="tab-broadcast" class="tab">
+      <h2>Broadcast</h2>
+      <p class="muted">Send an offer/message to all customers (Messenger + website).</p>
+      <textarea id="bcText" rows="4" placeholder="ঈদ অফার! সব ড্রেসে ২০% ছাড়..."></textarea><br><br>
+      <button onclick="sendBroadcast()">📢 Send Broadcast</button>
+      <span id="bcResult" class="muted"></span>
+    </section>
+    <section id="tab-aisetu" class="tab">
+      <h2>🧠 AI Setup - Train your AI</h2>
+      <div class="form-grid">
+        <label>Business name<input id="sName"></label>
+        <label>Greeting<input id="sGreet"></label>
+        <label>Delivery charge<input id="sDel"></label>
+        <label>Return policy<input id="sRet"></label>
+        <label>Payment<input id="sPay"></label>
+      </div>
+      <button onclick="saveSettings()">Save</button> <span id="setMsg" class="muted"></span>
+      <h3>FAQs</h3>
+      <div class="form-row"><input id="fQ" placeholder="Question"><input id="fA" placeholder="Answer"><button onclick="addFaq()">Add FAQ</button></div>
+      <div id="faqList"></div>
+    </section>
+    <section id="tab-analytics" class="tab">
+      <h2>Analytics</h2>
+      <div class="cards" id="anaCards"></div>
+      <h3>Messages (last 7 days)</h3><div id="msgChart"></div>
+      <h3>Orders by status</h3><div id="ordChart"></div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
