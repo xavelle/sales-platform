@@ -26,7 +26,7 @@ async function geminiReply(history) {
     role: m.sender === 'customer' ? 'user' : 'model',
     parts: [{ text: m.text }]
   }));
-  const sys = `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices.`;
+  const sys = `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative. When the customer can't decide, recommend the best product for their budget/need. Always mention stock availability when giving prices.`;
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -47,9 +47,23 @@ function demoBrain(text, history) {
   if (/(delivery|ডেলিভারি|কুরিয়ার|পাঠা)/.test(t)) return `${getSetting('delivery_charge', 'ঢাকায় ৭০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। অর্ডার করলে ২-৩ দিনে পৌঁছে যাবে।`;
   if (/(return|রিটার্ন|ফেরত|exchange|এক্সচেঞ্জ)/.test(t)) return `${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে')}।`;
   if (/(দাম|price|cost|কত)/.test(t)) {
-    if (hit) return `${hit.name}-এর দাম ৳${hit.price}। ${hit.sizes ? 'সাইজ: ' + hit.sizes + '। ' : ''}অর্ডার করতে চাইলে আপনার নাম, ঠিকানা আর ফোন নম্বর দিন।`;
+    if (hit) {
+      if (hit.stock <= 0) return `দুঃখিত, ${hit.name} এখন স্টক শেষ। অন্য কিছু দেখতে চান?`;
+      return `${hit.name}-এর দাম ৳${hit.price}। ${hit.sizes ? 'সাইজ: ' + hit.sizes + '। ' : ''}স্টকে ${hit.stock} পিস আছে। অর্ডার করতে চাইলে আপনার নাম, ঠিকানা আর ফোন নম্বর দিন।`;
+    }
     const list = products.map(p => `${p.name} ৳${p.price}`).join(', ');
     return `আমাদের কালেকশন: ${list}। কোনটার দাম জানতে চান?`;
+  };
+  if (/(স্টক|stock)/.test(t)) {
+    if (hit) return hit.stock > 0 ? `${hit.name} স্টকে আছে — ${hit.stock} পিস।` : `দুঃখিত, ${hit.name} এখন স্টক শেষ।`;
+    const avail = products.filter(p => p.stock > 0);
+    return avail.length ? `স্টকে আছে: ${avail.map(p => `${p.name} (${p.stock} পিস)`).join(', ')}।` : `দুঃখিত, এখন সব প্রোডাক্ট স্টক শেষ।`;
+  }
+  if (/(ভালো হবে|recommend|সাজেস্ট|suggest|কোনটা নিব|পরামর্শ|best)/.test(t)) {
+    const avail = products.filter(p => p.stock > 0).slice(0, 3);
+    if (!avail.length) return `দুঃখিত, এখন সব প্রোডাক্ট স্টক শেষ।`;
+    if (avail.length === 1) return `আমার সাজেশন: ${avail[0].name} ৳${avail[0].price} — ${avail[0].description || 'বেস্ট সেলার'}।`;
+    return `আপনার জন্য সাজেশন: ${avail.map(p => `${p.name} ৳${p.price}`).join(', ')}। কোনটা পছন্দ হলো?`;
   }
   if (/(size|সাইজ|মাপ)/.test(t)) {
     if (hit) return `${hit.name}-এ সাইজ আছে: ${hit.sizes || 'ফ্রি সাইজ'}। স্টকে ${hit.stock} পিস আছে।`;
