@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { db, getSetting, setSetting, addMessage, nextOrderNo } = require('./db');
+const { db, getSetting, setSetting, addMessage, nextOrderNo, adjustStockForItems } = require('./db');
 const { handleWebchat } = require('./channels/webchat');
 const messenger = require('./channels/messenger');
 const whatsapp = require('./channels/whatsapp');
@@ -103,9 +103,15 @@ app.post('/api/orders', (req, res) => {
   const order_no = nextOrderNo();
   const r = db.prepare('INSERT INTO orders (order_no, customer_id, conversation_id, items, total, address) VALUES (?, ?, ?, ?, ?, ?)')
     .run(order_no, customer_id || null, conversation_id || null, JSON.stringify(items), total, address || '');
-  res.json({ ok: true, id: r.lastInsertRowid, order_no });
+  adjustStockForItems(items, -1); // sell হলে stock কমবে
+  res.json({ ok: true, id: Number(r.lastInsertRowid), order_no });
 });
 app.patch('/api/orders/:id', (req, res) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
+  if (!o) return res.status(404).json({ error: 'not found' });
+  if (req.body.status === 'cancelled' && o.status !== 'cancelled') {
+    adjustStockForItems(JSON.parse(o.items || '[]'), +1); // cancel হলে stock ফিরবে
+  }
   db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(req.body.status, req.params.id);
   res.json({ ok: true });
 });
