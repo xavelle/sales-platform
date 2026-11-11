@@ -1,6 +1,9 @@
 // AI brain - answers customer messages in Bangla/English.
-// Uses Gemini API when GEMINI_API_KEY is set, otherwise a built-in
-// rule-based demo brain (works offline, no key needed).
+// Provider chain (all free tiers), best first:
+//   1. Gemini 3.8 Flash (Google)      2. Llama 3.3 70B (Groq)
+//   3. GPT-4o mini (GitHub Models)    4. Gemini 3.5 Flash-Lite (Google)
+// If every provider fails, a built-in rule-based demo brain answers,
+// so no customer message ever goes unanswered.
 const { db, getSetting } = require('./db');
 
 function businessContext() {
@@ -19,33 +22,54 @@ function businessContext() {
   return lines.join('\n');
 }
 
-async function geminiReply(history) {
+function systemPrompt() {
+  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. STRICT RULE: only mention products that appear in the Products list above, with their exact listed price and stock. If the Products list is empty, or no listed product matches the customer's budget/need, NEVER claim a product exists or is in stock — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative from the list. When the customer can't decide, recommend the best LISTED product for their budget/need. Always mention stock availability when giving prices.`;
+}
+
+async function fetchWithTimeout(url, options, ms = 10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally { clearTimeout(timer); }
+}
+
+// One Gemini model attempt. Returns reply text or null.
+async function tryGemini(history, model) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
   const contents = history.map(m => ({
     role: m.sender === 'customer' ? 'user' : 'model',
     parts: [{ text: m.text }]
   }));
-  const sys = `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative. When the customer can't decide, recommend the best product for their budget/need. Always mention stock availability when giving prices.`;
-  const models = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
-  for (const model of models) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 10000);
-      let res;
-      try {
-        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
-          body: JSON.stringify({ system_instruction: { parts: [{ text: sys }] }, contents })
-        });
-      } finally { clearTimeout(timer); }
-      if (!res.ok) { console.error('[ai] gemini HTTP', res.status, model); continue; }
-      const data = await res.json();
-      const t = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (t) return t.trim();
-    } catch (e) { console.error('[ai] gemini error', e.message, model); }
-  }
-  return null;
+  try {
+    const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt() }] }, contents })
+    });
+    if (!res.ok) { console.error('[ai] gemini HTTP', res.status, model); return null; }
+    const data = await res.json();
+    const t = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    return t ? t.trim() : null;
+  } catch (e) { console.error('[ai] gemini error', e.message, model); return null; }
+}
+
+// One OpenAI-compatible provider attempt (Groq, GitHub Models). Returns reply text or null.
+async function tryOpenAICompatible(label, url, key, model, history) {
+  if (!key) return null;
+  const messages = [{ role: 'system', content: systemPrompt() }];
+  for (const m of history) messages.push({ role: m.sender === 'customer' ? 'user' : 'assistant', content: m.text });
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({ model, messages })
+    });
+    if (!res.ok) { console.error('[ai]', label, 'HTTP', res.status, model); return null; }
+    const data = await res.json();
+    const t = data?.choices?.[0]?.message?.content;
+    return t ? t.trim() : null;
+  } catch (e) { console.error('[ai]', label, 'error', e.message, model); return null; }
 }
 
 // Demo brain: keyword-based, works without any API key.
@@ -63,7 +87,7 @@ function demoBrain(text, history) {
     }
     const list = products.map(p => `${p.name} ৳${p.price}`).join(', ');
     return `আমাদের কালেকশন: ${list}। কোনটার দাম জানতে চান?`;
-  };
+  }
   if (/(স্টক|stock)/.test(t)) {
     if (hit) return hit.stock > 0 ? `${hit.name} স্টকে আছে — ${hit.stock} পিস।` : `দুঃখিত, ${hit.name} এখন স্টক শেষ।`;
     const avail = products.filter(p => p.stock > 0);
@@ -79,12 +103,10 @@ function demoBrain(text, history) {
     if (hit) return `${hit.name}-এ সাইজ আছে: ${hit.sizes || 'ফ্রি সাইজ'}। স্টকে ${hit.stock} পিস আছে।`;
     return `কোন ড্রেসের সাইজ জানতে চান?`;
   }
-  if (/(delivery|ডেলিভারি|পাঠা)/.test(t)) return `${getSetting('delivery_charge', 'ঢাকায় ৭০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। অর্ডার করলে ২-৩ দিনে পৌঁছে যাবে।`;
   if (/(order|অর্ডার|নিব|কিনব|চাই)/.test(t)) {
     const prod = hit ? hit.name : 'কোন প্রোডাক্ট';
     return `অবশ্যই! ${prod} অর্ডার করতে আপনার নাম, মোবাইল নম্বর আর সম্পূর্ণ ঠিকানা দিন।`;
   }
-  if (/(return|রিটার্ন|ফেরত|exchange|এক্সচেঞ্জ)/.test(t)) return `${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে')}।`;
   if (/(hi|hello|hey|সালাম|আসসালামু|হাই|adab)/.test(t)) return `${getSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম')} 😊 কীভাবে সাহায্য করতে পারি?`;
   if (/(ধন্যবাদ|thanks|thank)/.test(t)) return `আপনাকেও ধন্যবাদ! আর কিছু জানতে চাইলে বলুন।`;
   for (const f of db.prepare('SELECT * FROM faqs').all()) {
@@ -101,8 +123,17 @@ async function generateReply(conversation_id) {
   // Don't reply twice to the same message
   const last = history[history.length - 1];
   if (last.sender !== 'customer') return null;
-  const ai = await geminiReply(history);
-  if (ai) return ai;
+
+  const attempts = [
+    () => tryGemini(history, 'gemini-3.8-flash'),
+    () => tryOpenAICompatible('groq', 'https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', history),
+    () => tryOpenAICompatible('github-models', 'https://models.github.ai/inference/chat/completions', process.env.GITHUB_MODELS_TOKEN, 'openai/gpt-4o-mini', history),
+    () => tryGemini(history, 'gemini-3.5-flash-lite'),
+  ];
+  for (const attempt of attempts) {
+    const reply = await attempt();
+    if (reply) return reply;
+  }
   return demoBrain(lastCustomer.text, history);
 }
 
