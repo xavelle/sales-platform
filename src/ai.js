@@ -28,14 +28,20 @@ async function geminiReply(history) {
   }));
   const sys = `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative. When the customer can't decide, recommend the best product for their budget/need. Always mention stock availability when giving prices.`;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system_instruction: { parts: [{ text: sys }] }, contents })
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    let res;
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+        body: JSON.stringify({ system_instruction: { parts: [{ text: sys }] }, contents })
+      });
+    } finally { clearTimeout(timer); }
+    if (!res.ok) { console.error('[ai] gemini HTTP', res.status); return null; }
     const data = await res.json();
     const t = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     return t ? t.trim() : null;
-  } catch { return null; }
+  } catch (e) { console.error('[ai] gemini error', e.message); return null; }
 }
 
 // Demo brain: keyword-based, works without any API key.
