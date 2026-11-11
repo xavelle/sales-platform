@@ -27,7 +27,7 @@ async function geminiReply(history) {
     parts: [{ text: m.text }]
   }));
   const sys = `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative. When the customer can't decide, recommend the best product for their budget/need. Always mention stock availability when giving prices.`;
-  const models = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+  const models = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
   for (const model of models) {
     try {
       const ctrl = new AbortController();
