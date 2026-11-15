@@ -118,4 +118,17 @@ async function handleCartMessage(convId, rawText) {
   return billText(cart, delivery);
 }
 
-module.exports = { handleCartMessage };
+// কার্ডের "অর্ডার করুন" বোতাম থেকে সরাসরি কার্টে যোগ + বর্তমান বিল (কোডে হিসাব)
+function addProductToCart(convId, product) {
+  let cart = carts.get(convId);
+  if (!cart) { cart = new Map(); carts.set(convId, cart); }
+  const existing = cart.get(product.key);
+  cart.set(product.key, { name: product.name, price: product.price, qty: existing ? existing.qty : 1 });
+}
+function billForCart(convId, delivery = null) {
+  const cart = carts.get(convId);
+  if (!cart || !cart.size) return null;
+  return billText(cart, delivery);
+}
+
+module.exports = { handleCartMessage, addProductToCart, billForCart };
