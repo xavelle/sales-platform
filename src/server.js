@@ -104,6 +104,12 @@ app.post('/api/settings', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Messenger Profile (Get Started / মেনু সেটআপের ফল) ----------
+app.get('/api/messenger-profile', (req, res) => {
+  try { res.json(JSON.parse(getSetting('profile_setup_result', '{}'))); }
+  catch { res.json({}); }
+});
+
 // ---------- Orders ----------
 app.get('/api/orders', (req, res) => {
   const rows = db.prepare(`
@@ -153,4 +159,7 @@ app.get('/api/analytics', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Sales Platform running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Sales Platform running on http://localhost:${PORT}`);
+  require('./messenger-profile').setupProfile(); // Get Started/মেনু Page-এ বসাও
+});
