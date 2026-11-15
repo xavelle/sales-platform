@@ -1,6 +1,6 @@
 // Facebook Messenger channel.
 // Needs: FB_VERIFY_TOKEN, FB_PAGE_ACCESS_TOKEN in .env + webhook URL set in Meta app.
-const { findOrCreateCustomer, findOrCreateConversation, addMessage } = require('../db');
+const { db, getSetting, findOrCreateCustomer, findOrCreateConversation, addMessage } = require('../db');
 const { generateReply } = require('../ai');
 
 function verify(req, res) {
@@ -32,6 +32,68 @@ function alreadySeen(mid) {
   }
   return false;
 }
+const seenPostbacks = new Set();
+function alreadySeenPostback(psid, payload, ts) {
+  const key = `${psid}|${payload}|${ts}`;
+  if (seenPostbacks.has(key)) return true;
+  seenPostbacks.add(key);
+  if (seenPostbacks.size > 1000) {
+    const it = seenPostbacks.values();
+    for (let i = 0; i < 500; i++) seenPostbacks.delete(it.next().value);
+  }
+  return false;
+}
+
+/* ---------- মেনু / রেডি প্রশ্নের নির্দিষ্ট উত্তর (লাইভ ডাটা থেকে, AI-এর আন্দাজে নয়) ---------- */
+function productListText() {
+  const products = db.prepare('SELECT name, price, stock FROM products ORDER BY id').all();
+  if (!products.length) return 'এখন নতুন কালেকশন আসছে — শীঘ্রই প্রোডাক্ট দেখতে পারবেন! কী ধরনের ডিজাইন খুঁজছেন, জানালে এসে গেলেই জানিয়ে দেব।';
+  const lines = products.map(p => p.stock > 0 ? `• ${p.name} — ৳${p.price} (স্টকে আছে)` : `• ${p.name} — ৳${p.price} (স্টক শেষ)`);
+  return `আমাদের প্রোডাক্টসমূহ:\n${lines.join('\n')}\nঅর্ডার করতে প্রোডাক্টের নাম লিখে পাঠান।`;
+}
+function deliveryText() {
+  return `🚚 ডেলিভারি চার্জ: ${getSetting('delivery_charge', 'ঢাকার ভেতরে ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। ঢাকায় ১-২ দিন, ঢাকার বাইরে ২-৩ দিনে পৌঁছে যায়।\n💵 পেমেন্ট: ${getSetting('payment', 'ক্যাশ অন ডেলিভারি (COD)')}\n↩️ রিটার্ন: ${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে')}`;
+}
+function orderHelpText() {
+  return 'অর্ডার করতে পছন্দের প্রোডাক্টের নাম, সাইজ, আপনার নাম, মোবাইল নম্বর আর সম্পূর্ণ ঠিকানা এখানেই পাঠিয়ে দিন — বাকিটা আমরা সাজিয়ে নেব।';
+}
+function codText() {
+  return `হ্যাঁ, সারা বাংলাদেশে ${getSetting('payment', 'ক্যাশ অন ডেলিভারি (COD)')} সুবিধা আছে — প্রোডাক্ট হাতে পেয়ে টাকা দেবেন।`;
+}
+
+/* ---------- Get Started / মেনু / রেডি প্রশ্নের ট্যাপ ---------- */
+async function handlePostback(psid, payload) {
+  const customer = findOrCreateCustomer('messenger', String(psid));
+  const conv = findOrCreateConversation(customer);
+  const label = {
+    GET_STARTED: '[Get Started চাপা হয়েছে]',
+    MENU_PRODUCTS: '[মেনু: প্রোডাক্ট দেখুন]',
+    MENU_HUMAN: 'মানুষের সাথে কথা বলতে চাই',
+    ICE_ORDER: 'কীভাবে অর্ডার করব?',
+    ICE_DELIVERY: 'ডেলিভারি চার্জ কত?',
+    ICE_COD: 'ক্যাশ অন ডেলিভারি আছে?',
+    ICE_HUMAN: 'মানুষের সাথে কথা বলতে চাই',
+  }[payload] || `[${payload}]`;
+  addMessage(conv.id, 'customer', label);
+
+  let reply = null;
+  if (payload === 'GET_STARTED') {
+    reply = `${getSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম')} 😊\nপণ্য, দাম, ডেলিভারি বা অর্ডার নিয়ে সরাসরি লিখুন — অথবা নিচের মেনু থেকে বেছে নিন।`;
+  } else if (payload === 'MENU_PRODUCTS') {
+    reply = productListText();
+  } else if (payload === 'ICE_DELIVERY') {
+    reply = deliveryText();
+  } else if (payload === 'ICE_ORDER') {
+    reply = orderHelpText();
+  } else if (payload === 'ICE_COD') {
+    reply = codText();
+  } else if (payload === 'MENU_HUMAN' || payload === 'ICE_HUMAN') {
+    // মানুষ দায়িত্ব নেবে — এই কথোপকথনে AI বন্ধ, ইনবক্সে unread হিসেবে উঠবে
+    db.prepare('UPDATE conversations SET ai_enabled = 0, unread = 1 WHERE id = ?').run(conv.id);
+    reply = `ঠিক আছে, আমাদের প্রতিনিধিকে জানিয়ে দিয়েছি — তিনি শীঘ্রই এখানেই উত্তর দেবেন। জরুরি হলে কল করুন: ${getSetting('phone', '01887099973')}`;
+  }
+  if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+}
 
 async function receive(req, res) {
   res.status(200).send('EVENT_RECEIVED');
@@ -40,6 +102,11 @@ async function receive(req, res) {
     if (body.object !== 'page') return;
     for (const entry of body.entry || []) {
       for (const ev of entry.messaging || []) {
+        if (ev.postback && ev.postback.payload) {
+          if (alreadySeenPostback(ev.sender.id, ev.postback.payload, ev.timestamp)) continue;
+          await handlePostback(ev.sender.id, ev.postback.payload);
+          continue;
+        }
         if (!ev.message || ev.message.is_echo) continue;
         if (alreadySeen(ev.message.mid)) continue;
         const psid = ev.sender.id, text = ev.message.text;
