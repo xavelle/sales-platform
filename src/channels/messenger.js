@@ -46,6 +46,9 @@ function alreadySeenPostback(psid, payload, ts) {
   return false;
 }
 
+// কথোপকথনের শেষ ছবি — পরের লেখা ("এটা আছে?") এলে ওই ছবি ধরেই উত্তর দেওয়ার জন্য
+const lastImageByConv = new Map();
+
 /* ---------- মেনু / রেডি প্রশ্নের নির্দিষ্ট উত্তর (লাইভ ডাটা থেকে, AI-এর আন্দাজে নয়) ---------- */
 // প্রোডাক্ট তালিকা — ওয়েবসাইটের লাইভ ক্যাটালগ থেকে (স্টকের সংখ্যা কখনো দেখানো হয় না, শুধু "সীমিত"/"শেষ")
 async function productListText() {
@@ -129,11 +132,25 @@ async function receive(req, res) {
         const atts = ev.message.attachments || [];
         const audio = atts.find(a => a.type === 'audio');
         const image = atts.find(a => a.type === 'image');
+        const isSticker = ev.message.sticker_id || atts.some(a => a.payload && a.payload.sticker_id);
+
+        if (!ev.message.text && isSticker) {
+          // লাইক/স্টিকার — কোনো উত্তর না, শুধু রেকর্ড
+          addMessage(conv.id, 'customer', '👍 [লাইক]');
+          continue;
+        }
 
         if (ev.message.text) {
+          const prevCust = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND sender = 'customer' ORDER BY id DESC LIMIT 1").get(conv.id);
           addMessage(conv.id, 'customer', ev.message.text);
           if (conv.ai_enabled) {
-            const reply = await generateReply(conv.id);
+            let reply = null;
+            const imgUrl = lastImageByConv.get(conv.id);
+            // ঠিক আগের মেসেজটা ছবি হলে, এই প্রশ্নটা ওই ছবি নিয়েই — ছবি দেখে উত্তর
+            if (imgUrl && prevCust && prevCust.text.startsWith('📷')) {
+              reply = await generateImageReply(imgUrl, ev.message.text, true);
+            }
+            if (!reply) reply = await generateReply(conv.id);
             if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
           }
         } else if (audio) {
@@ -153,11 +170,14 @@ async function receive(req, res) {
             }
           }
         } else if (image) {
-          // ছবি: AI ছবি দেখে ক্যাটালগের সাথে মিলিয়ে উত্তর দেবে
+          // ছবি: সেলসম্যান ছবি ধরে বিক্রির কথা বলবে
+          const imgUrl = image.payload && image.payload.url;
+          if (imgUrl) lastImageByConv.set(conv.id, imgUrl);
           addMessage(conv.id, 'customer', '📷 [ছবি পাঠিয়েছেন]');
           if (conv.ai_enabled) {
-            const reply = await generateImageReply(image.payload && image.payload.url);
-            const t = reply || 'ছবিটা পেয়েছি, কিন্তু ঠিক বুঝতে পারিনি। কোন প্রোডাক্টটা খুঁজছেন, নামটা একটু লিখে পাঠাবেন?';
+            const priorAi = db.prepare("SELECT 1 FROM messages WHERE conversation_id = ? AND sender = 'ai' LIMIT 1").get(conv.id);
+            const reply = await generateImageReply(imgUrl, undefined, !!priorAi);
+            const t = reply || 'ছবিটা পেয়েছি! এই ডিজাইনটা নিয়ে জানতে চাইলে প্রোডাক্টের নামটা একটু লিখে পাঠান, দামসহ বলে দিচ্ছি।';
             addMessage(conv.id, 'ai', t); await sendMessage(psid, t);
           }
         }
