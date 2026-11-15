@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { db, getSetting, setSetting, addMessage, nextOrderNo, adjustStockForItems } = require('./db');
+require('./startup-seed').seedIfFresh(); // রিস্টার্টে ডাটা মুছে গেলে আসল তথ্য নিজে বসবে
 const { handleWebchat } = require('./channels/webchat');
 const messenger = require('./channels/messenger');
 const whatsapp = require('./channels/whatsapp');
@@ -94,7 +95,7 @@ app.delete('/api/faqs/:id', (req, res) => {
 
 // ---------- Settings (AI Setup) ----------
 app.get('/api/settings', (req, res) => {
-  const keys = ['business_name', 'greeting', 'delivery_charge', 'return_policy', 'payment'];
+  const keys = ['business_name', 'greeting', 'website', 'phone', 'location', 'delivery_charge', 'return_policy', 'payment'];
   const out = {}; keys.forEach(k => out[k] = getSetting(k));
   res.json(out);
 });

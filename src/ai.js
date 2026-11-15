@@ -12,6 +12,9 @@ function businessContext() {
   const lines = [
     `Business: ${getSetting('business_name', 'Xavelle')}`,
     `Greeting: ${getSetting('greeting', 'স্বাগতম!')}`,
+    `Website: ${getSetting('website', 'https://xavelle.github.io/xavelle/')}`,
+    `Phone: ${getSetting('phone', '01887099973')}`,
+    `Location: ${getSetting('location', 'অনলাইন শপ — সারা বাংলাদেশে হোম ডেলিভারি')}`,
     `Delivery charge: ${getSetting('delivery_charge', 'ঢাকায় ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}`,
     `Return policy: ${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে')}`,
     `Payment: ${getSetting('payment', 'ক্যাশ অন ডেলিভারি')}`,
@@ -23,7 +26,7 @@ function businessContext() {
 }
 
 function systemPrompt() {
-  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use this business info:\n${businessContext()}\nIf the customer wants to order, collect: product name, size, address, phone. Never invent prices. STRICT RULE: only mention products that appear in the Products list above, with their exact listed price and stock. If the Products list is empty, or no listed product matches the customer's budget/need, NEVER claim a product exists or is in stock — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative from the list. When the customer can't decide, recommend the best LISTED product for their budget/need. Always mention stock availability when giving prices.`;
+  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use ONLY this business info:\n${businessContext()}\nRULES:\n1) GREETING: Use the Greeting line ONLY at the very start of a conversation or when the customer greets you first. Never start every reply with the greeting.\n2) NEVER INVENT: If the answer is not in the info above, do NOT guess or make anything up. Politely say you will confirm it (e.g. "এটা আমি নিশ্চিত করে জানাচ্ছি") and ask for the customer's phone number so the shop can contact them. Making up a wrong answer is the worst mistake.\n3) WEBSITE: The shop's website is LIVE at the Website address above. When asked for the website or link, give that exact address. Never say the website is under construction or not ready.\n4) ORDER: If the customer wants to order, collect: product name, size, address, phone.\n5) PRODUCTS (STRICT): Only mention products that appear in the Products list above, with their exact listed price and stock. Never invent prices. If the Products list is empty, or no listed product matches the customer's budget/need, NEVER claim a product exists or is in stock — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative from the list. When the customer can't decide, recommend the best LISTED product for their budget/need. Always mention stock availability when giving prices.`;
 }
 
 async function fetchWithTimeout(url, options, ms = 10000) {
@@ -78,6 +81,7 @@ function demoBrain(text, history) {
   const products = db.prepare('SELECT * FROM products').all();
   const hit = products.find(p => t.includes(p.name.toLowerCase().split(' ')[0]) || p.name.toLowerCase().split(' ').some(w => w.length > 3 && t.includes(w)));
 
+  if (/(website|ওয়েবসাইট|ওয়েব সাইট|link|লিংক|সাইট)/.test(t)) return `আমাদের ওয়েবসাইট: ${getSetting('website', 'https://xavelle.github.io/xavelle/')} — সব প্রোডাক্ট ওখানে দেখে সরাসরি অর্ডার করতে পারবেন।`;
   if (/(delivery|ডেলিভারি|কুরিয়ার|পাঠা)/.test(t)) return `${getSetting('delivery_charge', 'ঢাকায় ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। অর্ডার করলে ২-৩ দিনে পৌঁছে যাবে।`;
   if (/(return|রিটার্ন|ফেরত|exchange|এক্সচেঞ্জ)/.test(t)) return `${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে')}।`;
   if (/(দাম|price|cost|কত)/.test(t)) {
