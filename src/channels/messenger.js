@@ -4,7 +4,8 @@ const { db, getSetting, findOrCreateCustomer, findOrCreateConversation, addMessa
 const { generateReply, generateImageReply } = require('../ai');
 const { transcribeAudio } = require('../media');
 const { getWebsiteProducts } = require('../website');
-const { handleCartMessage } = require('../cart');
+const { handleCartMessage, addProductToCart, billForCart } = require('../cart');
+const { cardElement, categoryList, productsOfCategory, findProduct, matchCardsForText, CAT_LABELS, bnNum } = require('../cards');
 
 function verify(req, res) {
   const mode = req.query['hub.mode'], token = req.query['hub.verify_token'], challenge = req.query['hub.challenge'];
@@ -12,14 +13,24 @@ function verify(req, res) {
   return res.sendStatus(403);
 }
 
-async function sendMessage(psid, text) {
+async function sendRaw(psid, message) {
   const token = process.env.FB_PAGE_ACCESS_TOKEN;
-  if (!token) { console.log(`[messenger] no PAGE_ACCESS_TOKEN - would send to ${psid}: ${text}`); return false; }
+  if (!token) { console.log(`[messenger] no PAGE_ACCESS_TOKEN - would send to ${psid}: ${JSON.stringify(message).slice(0, 200)}`); return false; }
   const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipient: { id: psid }, message: { text } })
+    body: JSON.stringify({ recipient: { id: psid }, message })
   });
+  if (!res.ok) console.error('[messenger] send failed:', res.status, (await res.text()).slice(0, 200));
   return res.ok;
+}
+async function sendMessage(psid, text) { return sendRaw(psid, { text }); }
+// ছবিসহ প্রোডাক্ট কার্ড (Generic Template) — একসাথে সর্বোচ্চ ১০টা
+async function sendCards(psid, elements) {
+  if (!elements || !elements.length) return false;
+  return sendRaw(psid, { attachment: { type: 'template', payload: { template_type: 'generic', elements: elements.slice(0, 10) } } });
+}
+async function sendQuickReplies(psid, text, replies) {
+  return sendRaw(psid, { text, quick_replies: replies });
 }
 
 // Facebook মাঝে মাঝে একই মেসেজ একাধিকবার পাঠায় (সার্ভার ঘুমিয়ে থাকলে retry হয়)।
@@ -79,11 +90,11 @@ function codText() {
   return `হ্যাঁ, সারা বাংলাদেশে ${getSetting('payment', 'ক্যাশ অন ডেলিভারি (COD)')} সুবিধা আছে — প্রোডাক্ট হাতে পেয়ে টাকা দেবেন।`;
 }
 
-/* ---------- Get Started / মেনু / রেডি প্রশ্নের ট্যাপ ---------- */
+/* ---------- Get Started / মেনু / কার্ডের ট্যাপ ---------- */
 async function handlePostback(psid, payload) {
   const customer = findOrCreateCustomer('messenger', String(psid));
   const conv = findOrCreateConversation(customer);
-  const label = {
+  let label = {
     GET_STARTED: '[Get Started চাপা হয়েছে]',
     MENU_PRODUCTS: '[মেনু: প্রোডাক্ট দেখুন]',
     MENU_HUMAN: 'মানুষের সাথে কথা বলতে চাই',
@@ -91,15 +102,89 @@ async function handlePostback(psid, payload) {
     ICE_DELIVERY: 'ডেলিভারি চার্জ কত?',
     ICE_COD: 'ক্যাশ অন ডেলিভারি আছে?',
     ICE_HUMAN: 'মানুষের সাথে কথা বলতে চাই',
-  }[payload] || `[${payload}]`;
+  }[payload];
+  if (!label) {
+    if (payload.startsWith('CATMENU_')) label = '[ক্যাটাগরি বাছাই]';
+    else if (payload.startsWith('ORDER_')) label = '[কার্ড থেকে অর্ডার]';
+    else label = `[${payload}]`;
+  }
   addMessage(conv.id, 'customer', label);
 
-  let reply = null;
   if (payload === 'GET_STARTED') {
-    reply = `${getSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম')} 😊\nপণ্য, দাম, ডেলিভারি বা অর্ডার নিয়ে সরাসরি লিখুন — অথবা নিচের মেনু থেকে বেছে নিন।`;
-  } else if (payload === 'MENU_PRODUCTS') {
-    reply = await productListText();
-  } else if (payload === 'ICE_DELIVERY') {
+    const reply = `${getSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম')} 😊\nপণ্য, দাম, ডেলিভারি বা অর্ডার নিয়ে সরাসরি লিখুন — অথবা নিচের মেনু থেকে বেছে নিন।`;
+    addMessage(conv.id, 'ai', reply);
+    await sendQuickReplies(psid, reply, [
+      { content_type: 'text', title: '🛍️ প্রোডাক্ট দেখুন', payload: 'MENU_PRODUCTS' },
+      { content_type: 'text', title: '🚚 ডেলিভারি তথ্য', payload: 'ICE_DELIVERY' },
+      { content_type: 'text', title: '👤 মানুষের সাথে কথা', payload: 'MENU_HUMAN' },
+    ]);
+    return;
+  }
+
+  if (payload === 'MENU_PRODUCTS') {
+    // কথা নয় — ক্যাটাগরি বাছাই, তারপর ছবিসহ কার্ড
+    const cats = await categoryList();
+    if (!cats.length) {
+      const reply = await productListText();
+      addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply);
+      return;
+    }
+    const reply = 'কোন ক্যাটাগরির প্রোডাক্ট দেখতে চান? নিচে থেকে বেছে নিন 👇';
+    addMessage(conv.id, 'ai', reply);
+    await sendQuickReplies(psid, reply, cats.slice(0, 13).map(c => ({
+      content_type: 'text', title: `${c.label} (${bnNum(c.count)})`.slice(0, 20), payload: 'CATMENU_' + c.main,
+    })));
+    return;
+  }
+
+  if (payload.startsWith('CATMENU_')) {
+    const main = payload.slice('CATMENU_'.length);
+    const items = await productsOfCategory(main);
+    if (!items.length) {
+      const reply = 'দুঃখিত, এই ক্যাটাগরিতে এখন প্রোডাক্ট নেই। অন্য ক্যাটাগরি দেখুন অথবা প্রোডাক্টের নাম লিখে পাঠান।';
+      addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply);
+      return;
+    }
+    const labelBn = CAT_LABELS[main] || main;
+    const intro = `এই নিন আমাদের ${labelBn} কালেকশন 👇 পছন্দেরটায় "অর্ডার করুন" চাপলেই অর্ডার শুরু হয়ে যাবে।`;
+    addMessage(conv.id, 'ai', intro);
+    await sendMessage(psid, intro);
+    await sendCards(psid, items.slice(0, 10).map(cardElement));
+    if (items.length > 10) {
+      const more = `আরও ${bnNum(items.length - 10)}টা প্রোডাক্ট আছে — পুরো কালেকশন দেখুন: ${getSetting('website', 'https://xavelle.github.io/xavelle/')}`;
+      addMessage(conv.id, 'ai', more);
+      await sendMessage(psid, more);
+    }
+    return;
+  }
+
+  if (payload.startsWith('ORDER_')) {
+    // কার্ডের এক চাপে অর্ডার শুরু — প্রোডাক্ট কার্টে, তারপর সাইজ/বিল ধাপে ধাপে
+    const p = await findProduct(payload.slice('ORDER_'.length));
+    if (!p) {
+      const reply = 'দুঃখিত, প্রোডাক্টটা এখন খুঁজে পাচ্ছি না। নামটা লিখে পাঠালে দেখে দিচ্ছি।';
+      addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply);
+      return;
+    }
+    if (!p.inStock) {
+      const reply = `দুঃখিত, "${p.nameBn || p.nameEn}"-এর স্টক শেষ। কাছাকাছি অন্য ডিজাইন দেখতে চাইলে বলুন, কার্ড পাঠিয়ে দিচ্ছি।`;
+      addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply);
+      return;
+    }
+    addProductToCart(conv.id, { key: 'W' + p.id, name: p.nameBn || p.nameEn, price: p.price });
+    const sizes = (p.sizes || []).filter(Boolean);
+    let reply;
+    if (sizes.length && !(sizes.length === 1 && /free/i.test(sizes[0]))) {
+      reply = `দারুণ পছন্দ! ${p.nameBn || p.nameEn} — ৳${bnNum(p.price)}। কোন সাইজটা নেবেন? সাইজ আছে: ${sizes.join(', ')}`;
+    } else {
+      reply = billForCart(conv.id);
+    }
+    if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+    return;
+  }
+
+  let reply = null;
+  if (payload === 'ICE_DELIVERY') {
     reply = deliveryText();
   } else if (payload === 'ICE_ORDER') {
     reply = orderHelpText();
@@ -111,6 +196,14 @@ async function handlePostback(psid, payload) {
     reply = `ঠিক আছে, আমাদের প্রতিনিধিকে জানিয়ে দিয়েছি — তিনি শীঘ্রই এখানেই উত্তর দেবেন। জরুরি হলে কল করুন: ${getSetting('phone', '01887099973')}`;
   }
   if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+}
+
+// কথায় প্রোডাক্ট/ক্যাটাগরি এলে ছবিসহ কার্ডও পাঠানো — কথা কম, ছবি বেশি
+async function maybeSendCards(psid, text) {
+  try {
+    const items = await matchCardsForText(text);
+    if (items && items.length) await sendCards(psid, items.map(cardElement));
+  } catch (e) { console.error('[messenger] cards error', e.message); }
 }
 
 async function receive(req, res) {
@@ -128,6 +221,11 @@ async function receive(req, res) {
         if (!ev.message || ev.message.is_echo) continue;
         if (alreadySeen(ev.message.mid)) continue;
         const psid = ev.sender.id;
+        // কুইক-রিপ্লাই ট্যাপ (ক্যাটাগরি/মেনু বোতাম) — পোস্টব্যাকের মতোই হ্যান্ডেল হবে
+        if (ev.message.quick_reply && ev.message.quick_reply.payload) {
+          await handlePostback(psid, ev.message.quick_reply.payload);
+          continue;
+        }
         const customer = findOrCreateCustomer('messenger', String(psid));
         const conv = findOrCreateConversation(customer);
         const atts = ev.message.attachments || [];
@@ -147,15 +245,20 @@ async function receive(req, res) {
           if (conv.ai_enabled) {
             // হিসাবের ব্যাপার হলে কোডে তৈরি সঠিক বিলটাই যাবে, AI আন্দাজে যোগ করবে না
             let reply = await handleCartMessage(conv.id, ev.message.text);
+            const fromCart = !!reply;
+            let photoFollow = false;
             if (!reply) {
               const imgUrl = lastImageByConv.get(conv.id);
               // ঠিক আগের মেসেজটা ছবি হলে, এই প্রশ্নটা ওই ছবি নিয়েই — ছবি দেখে উত্তর
               if (imgUrl && prevCust && prevCust.text.startsWith('📷')) {
                 reply = await generateImageReply(imgUrl, ev.message.text, true);
+                photoFollow = !!reply;
               }
             }
             if (!reply) reply = await generateReply(conv.id);
             if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+            // বিল/ছবির উত্তর না হলে, প্রোডাক্ট নিয়ে কথা হলে ছবিসহ কার্ডও যাবে
+            if (!fromCart && !photoFollow) await maybeSendCards(psid, ev.message.text);
           }
         } else if (audio) {
           // ভয়েস মেসেজ: আগে লেখায় বদলাও, তারপর সাধারণ মেসেজের মতোই উত্তর
@@ -165,6 +268,7 @@ async function receive(req, res) {
             if (conv.ai_enabled) {
               const reply = await generateReply(conv.id);
               if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+              await maybeSendCards(psid, transcript);
             }
           } else {
             addMessage(conv.id, 'customer', '🎤 [ভয়েস মেসেজ — শোনা যায়নি]');
