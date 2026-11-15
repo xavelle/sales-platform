@@ -5,7 +5,9 @@
 // If every provider fails, a built-in rule-based demo brain answers,
 // so no customer message ever goes unanswered.
 const { db, getSetting } = require('./db');
+const { getWebsiteProducts } = require('./website');
 
+// লোকাল ব্যাকআপ কনটেক্সট — ওয়েবসাইট থেকে ক্যাটালগ না পেলে এটা চলবে।
 function businessContext() {
   const products = db.prepare('SELECT name, price, sizes, stock, description FROM products').all();
   const faqs = db.prepare('SELECT question, answer FROM faqs').all();
@@ -20,13 +22,37 @@ function businessContext() {
     `Payment: ${getSetting('payment', 'ক্যাশ অন ডেলিভারি')}`,
   ];
   lines.push('Products:');
-  for (const p of products) lines.push(`- ${p.name}: ৳${p.price} (sizes: ${p.sizes || 'free'}, stock: ${p.stock}) ${p.description || ''}`);
+  for (const p of products) lines.push(`- ${p.name}: ৳${p.price} (sizes: ${p.sizes || 'free'}, availability: ${p.stock > 0 ? 'স্টক সীমিত' : 'স্টক শেষ'}) ${p.description || ''}`);
   if (faqs.length) { lines.push('FAQs:'); for (const f of faqs) lines.push(`Q: ${f.question} A: ${f.answer}`); }
   return lines.join('\n');
 }
 
-function systemPrompt() {
-  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use ONLY this business info:\n${businessContext()}\nRULES:\n1) GREETING: Use the Greeting line ONLY at the very start of a conversation or when the customer greets you first. Never start every reply with the greeting.\n2) NEVER INVENT: If the answer is not in the info above, do NOT guess or make anything up. Politely say you will confirm it (e.g. "এটা আমি নিশ্চিত করে জানাচ্ছি") and ask for the customer's phone number so the shop can contact them. Making up a wrong answer is the worst mistake.\n3) WEBSITE: The shop's website is LIVE at the Website address above. When asked for the website or link, give that exact address. Never say the website is under construction or not ready.\n4) ORDER: If the customer wants to order, collect: product name, size, address, phone.\n5) PRODUCTS (STRICT): Only mention products that appear in the Products list above, with their exact listed price and stock. Never invent prices. If the Products list is empty, or no listed product matches the customer's budget/need, NEVER claim a product exists or is in stock — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. If a product's stock is 0, say it's out of stock ("স্টক শেষ") and suggest an available alternative from the list. When the customer can't decide, recommend the best LISTED product for their budget/need. Always mention stock availability when giving prices.`;
+// মূল কনটেক্সট — প্রোডাক্ট তালিকা আসে ওয়েবসাইটের লাইভ ক্যাটালগ থেকে (কন্ট্রোল প্যানেলই নিয়ন্ত্রণ করে)।
+// স্টকের সংখ্যা ইচ্ছাকৃতভাবে দেওয়া হয় না — শুধু "সীমিত" / "শেষ"।
+async function buildContext() {
+  const site = await getWebsiteProducts();
+  if (!site || !site.length) return businessContext();
+  const faqs = db.prepare('SELECT question, answer FROM faqs').all();
+  const lines = [
+    `Business: ${getSetting('business_name', 'Xavelle')}`,
+    `Greeting: ${getSetting('greeting', 'স্বাগতম!')}`,
+    `Website: ${getSetting('website', 'https://xavelle.github.io/xavelle/')}`,
+    `Phone: ${getSetting('phone', '01887099973')}`,
+    `Location: ${getSetting('location', 'অনলাইন শপ — সারা বাংলাদেশে হোম ডেলিভারি')}`,
+    `Delivery charge: ${getSetting('delivery_charge', 'ঢাকায় ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}`,
+    `Return policy: ${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে')}`,
+    `Payment: ${getSetting('payment', 'ক্যাশ অন ডেলিভারি')}`,
+    'Products (LIVE from the shop website — this is the full current catalog):',
+  ];
+  for (const p of site) {
+    lines.push(`- ${p.nameEn} (${p.nameBn}) — ৳${p.price}${p.oldPrice > p.price ? ` (আগের দাম ৳${p.oldPrice})` : ''}, সাইজ: ${p.sizes.join(', ') || 'Free'}, ক্যাটাগরি: ${p.category}, availability: ${p.inStock ? 'স্টক সীমিত' : 'স্টক শেষ'}${p.descBn ? ' — ' + p.descBn.slice(0, 90) : ''}`);
+  }
+  if (faqs.length) { lines.push('FAQs:'); for (const f of faqs) lines.push(`Q: ${f.question} A: ${f.answer}`); }
+  return lines.join('\n');
+}
+
+async function systemPrompt() {
+  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use ONLY this business info:\n${await buildContext()}\nRULES:\n1) GREETING: Use the Greeting line ONLY at the very start of a conversation or when the customer greets you first. Never start every reply with the greeting.\n2) NEVER INVENT: If the answer is not in the info above, do NOT guess or make anything up. Politely say you will confirm it (e.g. "এটা আমি নিশ্চিত করে জানাচ্ছি") and ask for the customer's phone number so the shop can contact them. Making up a wrong answer is the worst mistake.\n3) WEBSITE: The shop's website is LIVE at the Website address above. When asked for the website or link, give that exact address. Never say the website is under construction or not ready.\n4) ORDER: If the customer wants to order, collect: product name, size, address, phone.\n5) PRODUCTS (STRICT): Only mention products that appear in the Products list above, with their exact listed price. Never invent prices. If no listed product matches the customer's budget/need, NEVER claim a product exists — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. When the customer can't decide, recommend the best LISTED product for their budget/need.\n6) STOCK (STRICT): NEVER state an exact stock quantity or number of pieces — you are not given the numbers. If a product is available, say stock is limited ("স্টক সীমিত") and gently suggest ordering before it runs out. If it is marked স্টক শেষ, honestly say it's out of stock and suggest an available alternative from the list. Always mention availability when giving prices.`;
 }
 
 async function fetchWithTimeout(url, options, ms = 10000) {
@@ -38,7 +64,7 @@ async function fetchWithTimeout(url, options, ms = 10000) {
 }
 
 // One Gemini model attempt. Returns reply text or null.
-async function tryGemini(history, model) {
+async function tryGemini(history, model, prompt) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
   const contents = history.map(m => ({
@@ -48,7 +74,7 @@ async function tryGemini(history, model) {
   try {
     const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt() }] }, contents })
+      body: JSON.stringify({ system_instruction: { parts: [{ text: prompt }] }, contents })
     });
     if (!res.ok) { console.error('[ai] gemini HTTP', res.status, model); return null; }
     const data = await res.json();
@@ -58,9 +84,9 @@ async function tryGemini(history, model) {
 }
 
 // One OpenAI-compatible provider attempt (Groq, GitHub Models). Returns reply text or null.
-async function tryOpenAICompatible(label, url, key, model, history) {
+async function tryOpenAICompatible(label, url, key, model, history, prompt) {
   if (!key) return null;
-  const messages = [{ role: 'system', content: systemPrompt() }];
+  const messages = [{ role: 'system', content: prompt }];
   for (const m of history) messages.push({ role: m.sender === 'customer' ? 'user' : 'assistant', content: m.text });
   try {
     const res = await fetchWithTimeout(url, {
@@ -87,15 +113,15 @@ function demoBrain(text, history) {
   if (/(দাম|price|cost|কত)/.test(t)) {
     if (hit) {
       if (hit.stock <= 0) return `দুঃখিত, ${hit.name} এখন স্টক শেষ। অন্য কিছু দেখতে চান?`;
-      return `${hit.name}-এর দাম ৳${hit.price}। ${hit.sizes ? 'সাইজ: ' + hit.sizes + '। ' : ''}স্টকে ${hit.stock} পিস আছে। অর্ডার করতে চাইলে আপনার নাম, ঠিকানা আর ফোন নম্বর দিন।`;
+      return `${hit.name}-এর দাম ৳${hit.price}। ${hit.sizes ? 'সাইজ: ' + hit.sizes + '। ' : ''}স্টক সীমিত আছে — শেষ হওয়ার আগেই অর্ডার করুন। অর্ডার করতে চাইলে আপনার নাম, ঠিকানা আর ফোন নম্বর দিন।`;
     }
     const list = products.map(p => `${p.name} ৳${p.price}`).join(', ');
     return `আমাদের কালেকশন: ${list}। কোনটার দাম জানতে চান?`;
   }
   if (/(স্টক|stock)/.test(t)) {
-    if (hit) return hit.stock > 0 ? `${hit.name} স্টকে আছে — ${hit.stock} পিস।` : `দুঃখিত, ${hit.name} এখন স্টক শেষ।`;
+    if (hit) return hit.stock > 0 ? `${hit.name}-এর স্টক সীমিত আছে — শেষ হওয়ার আগেই অর্ডার করে ফেলুন।` : `দুঃখিত, ${hit.name} এখন স্টক শেষ।`;
     const avail = products.filter(p => p.stock > 0);
-    return avail.length ? `স্টকে আছে: ${avail.map(p => `${p.name} (${p.stock} পিস)`).join(', ')}।` : `দুঃখিত, এখন সব প্রোডাক্ট স্টক শেষ।`;
+    return avail.length ? `স্টক সীমিত আছে: ${avail.map(p => p.name).join(', ')}। কোনটা নিতে চান?` : `দুঃখিত, এখন সব প্রোডাক্ট স্টক শেষ।`;
   }
   if (/(ভালো হবে|recommend|সাজেস্ট|suggest|কোনটা নিব|পরামর্শ|best)/.test(t)) {
     const avail = products.filter(p => p.stock > 0).slice(0, 3);
@@ -104,7 +130,7 @@ function demoBrain(text, history) {
     return `আপনার জন্য সাজেশন: ${avail.map(p => `${p.name} ৳${p.price}`).join(', ')}। কোনটা পছন্দ হলো?`;
   }
   if (/(size|সাইজ|মাপ)/.test(t)) {
-    if (hit) return `${hit.name}-এ সাইজ আছে: ${hit.sizes || 'ফ্রি সাইজ'}। স্টকে ${hit.stock} পিস আছে।`;
+    if (hit) return `${hit.name}-এ সাইজ আছে: ${hit.sizes || 'ফ্রি সাইজ'}। স্টক সীমিত আছে।`;
     return `কোন ড্রেসের সাইজ জানতে চান?`;
   }
   if (/(order|অর্ডার|নিব|কিনব|চাই)/.test(t)) {
@@ -128,11 +154,12 @@ async function generateReply(conversation_id) {
   const last = history[history.length - 1];
   if (last.sender !== 'customer') return null;
 
+  const prompt = await systemPrompt();
   const attempts = [
-    () => tryGemini(history, 'gemini-3.8-flash'),
-    () => tryOpenAICompatible('groq', 'https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', history),
-    () => tryOpenAICompatible('github-models', 'https://models.github.ai/inference/chat/completions', process.env.GITHUB_MODELS_TOKEN, 'openai/gpt-4o-mini', history),
-    () => tryGemini(history, 'gemini-3.5-flash-lite'),
+    () => tryGemini(history, 'gemini-3.8-flash', prompt),
+    () => tryOpenAICompatible('groq', 'https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', history, prompt),
+    () => tryOpenAICompatible('github-models', 'https://models.github.ai/inference/chat/completions', process.env.GITHUB_MODELS_TOKEN, 'openai/gpt-4o-mini', history, prompt),
+    () => tryGemini(history, 'gemini-3.5-flash-lite', prompt),
   ];
   for (const attempt of attempts) {
     const reply = await attempt();
@@ -142,9 +169,9 @@ async function generateReply(conversation_id) {
 }
 
 /* ---------- ছবি বোঝা: কাস্টমারের পাঠানো ছবি ক্যাটালগের সাথে মেলানো ---------- */
-function imagePrompt() {
-  return `You are the sales assistant of this shop. A customer sent a photo in chat. Use ONLY this business info:\n${businessContext()}\nTASK: Look at the photo carefully.
-- If it shows a product that matches the Products list above (type/color/design), reply with that product's exact name, price and stock, and ask if they want to order it.
+async function imagePrompt() {
+  return `You are the sales assistant of this shop. A customer sent a photo in chat. Use ONLY this business info:\n${await buildContext()}\nTASK: Look at the photo carefully.
+- If it shows a product that matches the Products list above (type/color/design), reply with that product's exact name and price, say stock is limited ("স্টক সীমিত") if it is available, and ask if they want to order it. NEVER state an exact stock quantity.
 - If it shows a similar product that is NOT in the list, clearly say this exact design is not in our collection, then name the closest listed products with their prices.
 - If it is a payment (bKash/Nagad) screenshot, thank them and say our team will confirm the payment very soon.
 - Otherwise, briefly say what the photo shows and ask how you can help.
@@ -161,7 +188,7 @@ async function tryGeminiVision(imageUrl, model) {
     const buf = Buffer.from(await imgRes.arrayBuffer());
     const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: imagePrompt() }, { inline_data: { mime_type: mime, data: buf.toString('base64') } }] }] })
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: await imagePrompt() }, { inline_data: { mime_type: mime, data: buf.toString('base64') } }] }] })
     });
     if (!res.ok) { console.error('[ai] gemini vision HTTP', res.status, model); return null; }
     const data = await res.json();
@@ -176,7 +203,7 @@ async function tryOpenAIVision(imageUrl) {
   try {
     const res = await fetchWithTimeout('https://models.github.ai/inference/chat/completions', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: [{ type: 'text', text: imagePrompt() }, { type: 'image_url', image_url: { url: imageUrl } }] }] })
+      body: JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: [{ type: 'text', text: await imagePrompt() }, { type: 'image_url', image_url: { url: imageUrl } }] }] })
     });
     if (!res.ok) { console.error('[ai] gpt vision HTTP', res.status); return null; }
     const data = await res.json();
@@ -192,4 +219,4 @@ async function generateImageReply(imageUrl) {
       || (await tryGeminiVision(imageUrl, 'gemini-3.5-flash-lite'));
 }
 
-module.exports = { generateReply, generateImageReply, businessContext };
+module.exports = { generateReply, generateImageReply, businessContext, buildContext };
