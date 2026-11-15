@@ -12,7 +12,7 @@ function businessContext() {
   const lines = [
     `Business: ${getSetting('business_name', 'Xavelle')}`,
     `Greeting: ${getSetting('greeting', 'স্বাগতম!')}`,
-    `Delivery charge: ${getSetting('delivery_charge', 'ঢাকায় ৭০ টাকা, ঢাকার বাইরে ১২০ টাকা')}`,
+    `Delivery charge: ${getSetting('delivery_charge', 'ঢাকায় ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}`,
     `Return policy: ${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে')}`,
     `Payment: ${getSetting('payment', 'ক্যাশ অন ডেলিভারি')}`,
   ];
@@ -78,7 +78,7 @@ function demoBrain(text, history) {
   const products = db.prepare('SELECT * FROM products').all();
   const hit = products.find(p => t.includes(p.name.toLowerCase().split(' ')[0]) || p.name.toLowerCase().split(' ').some(w => w.length > 3 && t.includes(w)));
 
-  if (/(delivery|ডেলিভারি|কুরিয়ার|পাঠা)/.test(t)) return `${getSetting('delivery_charge', 'ঢাকায় ৭০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। অর্ডার করলে ২-৩ দিনে পৌঁছে যাবে।`;
+  if (/(delivery|ডেলিভারি|কুরিয়ার|পাঠা)/.test(t)) return `${getSetting('delivery_charge', 'ঢাকায় ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা')}। অর্ডার করলে ২-৩ দিনে পৌঁছে যাবে।`;
   if (/(return|রিটার্ন|ফেরত|exchange|এক্সচেঞ্জ)/.test(t)) return `${getSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে')}।`;
   if (/(দাম|price|cost|কত)/.test(t)) {
     if (hit) {

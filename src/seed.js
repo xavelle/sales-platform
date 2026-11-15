@@ -10,7 +10,7 @@ db.prepare('DELETE FROM faqs').run();
 
 setSetting('business_name', 'Xavelle');
 setSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম');
-setSetting('delivery_charge', 'ঢাকার ভেতরে ৭০ টাকা, ঢাকার বাইরে ১২০ টাকা');
+setSetting('delivery_charge', 'ঢাকার ভেতরে ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা');
 setSetting('return_policy', 'ডেলিভারির ৭ দিনের মধ্যে রিটার্ন/এক্সচেঞ্জ করা যাবে');
 setSetting('payment', 'ক্যাশ অন ডেলিভারি (COD)');
 
