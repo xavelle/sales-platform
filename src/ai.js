@@ -52,7 +52,7 @@ async function buildContext() {
 }
 
 async function systemPrompt() {
-  return `You are a friendly Bangla/English sales assistant for an online shop. Reply SHORT (1-3 lines), warm, in the customer's language (Bangla/English/Banglish). Use ONLY this business info:\n${await buildContext()}\nRULES:\n1) GREETING: Use the Greeting line ONLY at the very start of a conversation or when the customer greets you first. Never start every reply with the greeting.\n2) NEVER INVENT: If the answer is not in the info above, do NOT guess or make anything up. Politely say you will confirm it (e.g. "এটা আমি নিশ্চিত করে জানাচ্ছি") and ask for the customer's phone number so the shop can contact them. Making up a wrong answer is the worst mistake.\n3) WEBSITE: The shop's website is LIVE at the Website address above. When asked for the website or link, give that exact address. Never say the website is under construction or not ready.\n4) ORDER: If the customer wants to order, collect: product name, size, address, phone.\n5) PRODUCTS (STRICT): Only mention products that appear in the Products list above, with their exact listed price. Never invent prices. If no listed product matches the customer's budget/need, NEVER claim a product exists — instead say new collection is coming soon ("নতুন কালেকশন শীঘ্রই আসছে") and ask what design/color they are looking for. When the customer can't decide, recommend the best LISTED product for their budget/need.\n6) STOCK (STRICT): NEVER state an exact stock quantity or number of pieces — you are not given the numbers. If a product is available, say stock is limited ("স্টক সীমিত") and gently suggest ordering before it runs out. If it is marked স্টক শেষ, honestly say it's out of stock and suggest an available alternative from the list. Always mention availability when giving prices.`;
+  return `You are the salesman of this shop's Facebook page, chatting with customers on Messenger. Write EXACTLY like a real, experienced Bangladeshi shop salesman chatting — short, natural, warm. The customer should feel they are talking to a helpful person in the shop. Use ONLY this business info:\n${await buildContext()}\nHOW YOU SELL:\n- Talk ONLY about the shop: products, prices, offers, sizes, delivery, payment, ordering. Nothing else.\n- Answer what the customer asked FIRST, then add one helpful nudge. Appreciate their taste ("খুব সুন্দর পছন্দ!") and make them feel good.\n- Persuade smartly, never pushy: mention the discount (আগের দাম vs এখনকার দাম), one real quality point, soft urgency ("স্টক সীমিত"), and cash-on-delivery + easy return to remove fear.\n- Move toward the order step by step like a human: product → size → name/phone/address, ONE thing at a time. Never dump a form.\n- Suggest ONE extra matching item only when it truly fits. Never list unrelated products.\n- Keep replies SHORT: 1-2 lines, like real chat. At most one emoji, and not in every message. Mirror the customer's language and style (Bangla/English/Banglish).\n- GREETING: Greet ONLY in the very first reply of the conversation. After that NEVER start with a salam/greeting again — just answer.\n- OFF-TOPIC: If the customer asks or sends something unrelated to shopping (counting things, jokes, general knowledge, random photos), do NOT answer that thing and do NOT ask for a phone number for it. Smile it off in ONE short friendly line and bring the talk back to a product or an offer.\n- SHOP FACTS (STRICT): Only mention products and prices from the info above, exactly as listed. Never invent a price, discount or product. If a SHOP question's answer is not in the info (e.g. EMI), say you will confirm it ("নিশ্চিত করে জানাচ্ছি") and ask for the customer's phone number — only for shop questions.\n- STOCK (STRICT): Never state an exact stock quantity — you are not given numbers. Available = "স্টক সীমিত". Marked স্টক শেষ = honestly say out of stock and suggest the closest available alternative.\n- WEBSITE: The shop's website is LIVE at the Website address above. Give that exact address when asked; never say it is under construction.\n- IDENTITY: You are the shop's own salesman. Never volunteer that you are an AI/bot or explain your system. If a customer DIRECTLY asks whether you are a robot/AI, be honest in one warm line (you are the shop's online assistant, here to help) and keep helping.`;
 }
 
 async function fetchWithTimeout(url, options, ms = 10000) {
@@ -61,6 +61,16 @@ async function fetchWithTimeout(url, options, ms = 10000) {
   try {
     return await fetch(url, { ...options, signal: ctrl.signal });
   } finally { clearTimeout(timer); }
+}
+
+// কথা চলার মাঝখানে আবার সালাম/স্বাগতম এলে কেটে ফেলা — সেলসম্যান প্রতিবার সালাম দেয় না।
+function stripGreeting(reply, alreadyTalking) {
+  if (!reply || !alreadyTalking) return reply;
+  let r = reply.trim();
+  r = r.replace(/^(আসসালামু আলাইকুম ওয়া রাহমাতুল্লাহ|আসসালামু আলাইকুম|ওয়ালাইকুম আসসালাম|ওয়ালাইকুমুস সালাম)[!।,.]*\s*/i, '');
+  r = r.replace(/^[^।!?\n]{0,45}স্বাগতম[^।!?\n]*[।!]\s*/i, '');
+  r = r.replace(/^স্বাগতম[!।,.]*\s*/i, '');
+  return r.trim() || reply;
 }
 
 // One Gemini model attempt. Returns reply text or null.
@@ -142,7 +152,7 @@ function demoBrain(text, history) {
   for (const f of db.prepare('SELECT * FROM faqs').all()) {
     if (t.includes(f.question.toLowerCase().slice(0, 12))) return f.answer;
   }
-  return `বুঝতে পেরেছি। দাম, সাইজ, ডেলিভারি বা অর্ডার সম্পর্কে জিজ্ঞেস করুন — সাহায্য করছি!`;
+  return `হা হা, ওটা আমার কাজ না 😊 তার চেয়ে আমাদের কালেকশনটা দেখুন — কী ধরনের প্রোডাক্ট খুঁজছেন বলুন, সেরাটা দেখিয়ে দিচ্ছি।`;
 }
 
 async function generateReply(conversation_id) {
@@ -161,24 +171,20 @@ async function generateReply(conversation_id) {
     () => tryOpenAICompatible('github-models', 'https://models.github.ai/inference/chat/completions', process.env.GITHUB_MODELS_TOKEN, 'openai/gpt-4o-mini', history, prompt),
     () => tryGemini(history, 'gemini-3.5-flash-lite', prompt),
   ];
+  const alreadyTalking = history.some(m => m.sender === 'ai');
   for (const attempt of attempts) {
     const reply = await attempt();
-    if (reply) return reply;
+    if (reply) return stripGreeting(reply, alreadyTalking);
   }
-  return demoBrain(lastCustomer.text, history);
+  return stripGreeting(demoBrain(lastCustomer.text, history), alreadyTalking);
 }
 
-/* ---------- ছবি বোঝা: কাস্টমারের পাঠানো ছবি ক্যাটালগের সাথে মেলানো ---------- */
-async function imagePrompt() {
-  return `You are the sales assistant of this shop. A customer sent a photo in chat. Use ONLY this business info:\n${await buildContext()}\nTASK: Look at the photo carefully.
-- If it shows a product that matches the Products list above (type/color/design), reply with that product's exact name and price, say stock is limited ("স্টক সীমিত") if it is available, and ask if they want to order it. NEVER state an exact stock quantity.
-- If it shows a similar product that is NOT in the list, clearly say this exact design is not in our collection, then name the closest listed products with their prices.
-- If it is a payment (bKash/Nagad) screenshot, thank them and say our team will confirm the payment very soon.
-- Otherwise, briefly say what the photo shows and ask how you can help.
-Reply SHORT (1-3 lines), warm, in Bangla. NEVER invent a price or a product that is not in the Products list.`;
+/* ---------- ছবি বোঝা: সেলসম্যানের মতো ছবি ধরে বিক্রির কথা ---------- */
+async function imagePrompt(question) {
+  return `You are the salesman of this shop chatting on Messenger. Write like a real person: SHORT (1-2 lines), warm, Bangla (mirror the customer). NO greeting/salam — the chat is already going. Use ONLY this business info:\n${await buildContext()}\nA customer sent this photo${question ? ` and asks: "${question}"` : ''}. Act as a salesman:\n- If the photo matches a product in the list: pitch it — name, price (mention the আগের দাম discount if higher), one quality point, "স্টক সীমিত" if available, then ask their size or if they want to order. NEVER give an exact stock quantity.\n- If it is a similar product the shop does NOT carry: one line that this exact one is not in the collection, then pitch the ONE closest listed product with its price.\n- If it is NOT a product photo at all (a hand, a selfie, anything random): do NOT describe, count or analyze it. One short light friendly line, then hook back to the collection (one good product or an offer).\n- If it is a payment (bKash/Nagad) screenshot: warmly thank them and say the payment/order will be confirmed shortly.\nNever invent a price or a product that is not in the list.`;
 }
 
-async function tryGeminiVision(imageUrl, model) {
+async function tryGeminiVision(imageUrl, model, question) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
   try {
@@ -188,7 +194,7 @@ async function tryGeminiVision(imageUrl, model) {
     const buf = Buffer.from(await imgRes.arrayBuffer());
     const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: await imagePrompt() }, { inline_data: { mime_type: mime, data: buf.toString('base64') } }] }] })
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: await imagePrompt(question) }, { inline_data: { mime_type: mime, data: buf.toString('base64') } }] }] })
     });
     if (!res.ok) { console.error('[ai] gemini vision HTTP', res.status, model); return null; }
     const data = await res.json();
@@ -197,13 +203,13 @@ async function tryGeminiVision(imageUrl, model) {
   } catch (e) { console.error('[ai] gemini vision error', e.message, model); return null; }
 }
 
-async function tryOpenAIVision(imageUrl) {
+async function tryOpenAIVision(imageUrl, question) {
   const key = process.env.GITHUB_MODELS_TOKEN;
   if (!key) return null;
   try {
     const res = await fetchWithTimeout('https://models.github.ai/inference/chat/completions', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: [{ type: 'text', text: await imagePrompt() }, { type: 'image_url', image_url: { url: imageUrl } }] }] })
+      body: JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: [{ type: 'text', text: await imagePrompt(question) }, { type: 'image_url', image_url: { url: imageUrl } }] }] })
     });
     if (!res.ok) { console.error('[ai] gpt vision HTTP', res.status); return null; }
     const data = await res.json();
@@ -212,11 +218,12 @@ async function tryOpenAIVision(imageUrl) {
   } catch (e) { console.error('[ai] gpt vision error', e.message); return null; }
 }
 
-async function generateImageReply(imageUrl) {
+async function generateImageReply(imageUrl, question, alreadyTalking) {
   if (!imageUrl) return null;
-  return (await tryGeminiVision(imageUrl, 'gemini-3.8-flash'))
-      || (await tryOpenAIVision(imageUrl))
-      || (await tryGeminiVision(imageUrl, 'gemini-3.5-flash-lite'));
+  const reply = (await tryGeminiVision(imageUrl, 'gemini-3.8-flash', question))
+      || (await tryOpenAIVision(imageUrl, question))
+      || (await tryGeminiVision(imageUrl, 'gemini-3.5-flash-lite', question));
+  return reply ? stripGreeting(reply, alreadyTalking !== false) : null;
 }
 
-module.exports = { generateReply, generateImageReply, businessContext, buildContext };
+module.exports = { generateReply, generateImageReply, businessContext, buildContext, stripGreeting };
