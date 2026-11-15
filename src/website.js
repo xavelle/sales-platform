@@ -21,10 +21,19 @@ async function fetchWithTimeout(url, ms = 8000) {
   try { return await fetch(url, { signal: ctrl.signal }); } finally { clearTimeout(timer); }
 }
 
-// ওয়েবসাইটের প্রোডাক্ট তালিকা (visible গুলো)। পাওয়া না গেলে null (তখন লোকাল ব্যাকআপ চলবে)।
+// ওয়েবসাইটের প্রোডাক্ট তালিকা — হুবহু দোকানে যা দেখা যায়: visible প্রোডাক্ট, তবে
+// settings-এ লুকানো (hiddenCategories) ক্যাটাগরি বাদে। সাইটের নিজের নিয়মই (catVisible) এখানে মিরর করা,
+// যাতে বট এমন প্রোডাক্টের কথা না বলে যা কাস্টমার সাইটে দেখতেই পায় না। পাওয়া না গেলে null (লোকাল ব্যাকআপ চলবে)।
+let hiddenCache = [];
 async function getWebsiteProducts() {
   if (cache.products && Date.now() - cache.at < CACHE_MS) return cache.products;
   try {
+    const sres = await fetchWithTimeout(`${BASE}/settings/main`);
+    if (sres.ok) {
+      const sdata = await sres.json();
+      const hv = fv((sdata.fields || {}).hiddenCategories);
+      if (Array.isArray(hv)) hiddenCache = hv.map(String);
+    }
     const res = await fetchWithTimeout(`${BASE}/products?pageSize=100`);
     if (!res.ok) return cache.products;
     const data = await res.json();
@@ -33,6 +42,7 @@ async function getWebsiteProducts() {
     for (const doc of docs) {
       const f = doc.fields || {};
       if (fv(f.visible) === false) continue;
+      if (hiddenCache.includes(fv(f.main) || '')) continue;
       const stock = Number(fv(f.stock) || 0);
       products.push({
         id: fv(f.id) || doc.name.split('/').pop(),
