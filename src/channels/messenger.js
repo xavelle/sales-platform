@@ -1,7 +1,8 @@
 // Facebook Messenger channel.
 // Needs: FB_VERIFY_TOKEN, FB_PAGE_ACCESS_TOKEN in .env + webhook URL set in Meta app.
 const { db, getSetting, findOrCreateCustomer, findOrCreateConversation, addMessage } = require('../db');
-const { generateReply } = require('../ai');
+const { generateReply, generateImageReply } = require('../ai');
+const { transcribeAudio } = require('../media');
 
 function verify(req, res) {
   const mode = req.query['hub.mode'], token = req.query['hub.verify_token'], challenge = req.query['hub.challenge'];
@@ -109,14 +110,43 @@ async function receive(req, res) {
         }
         if (!ev.message || ev.message.is_echo) continue;
         if (alreadySeen(ev.message.mid)) continue;
-        const psid = ev.sender.id, text = ev.message.text;
-        if (!text) continue;
+        const psid = ev.sender.id;
         const customer = findOrCreateCustomer('messenger', String(psid));
         const conv = findOrCreateConversation(customer);
-        addMessage(conv.id, 'customer', text);
-        if (conv.ai_enabled) {
-          const reply = await generateReply(conv.id);
-          if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+        const atts = ev.message.attachments || [];
+        const audio = atts.find(a => a.type === 'audio');
+        const image = atts.find(a => a.type === 'image');
+
+        if (ev.message.text) {
+          addMessage(conv.id, 'customer', ev.message.text);
+          if (conv.ai_enabled) {
+            const reply = await generateReply(conv.id);
+            if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+          }
+        } else if (audio) {
+          // ভয়েস মেসেজ: আগে লেখায় বদলাও, তারপর সাধারণ মেসেজের মতোই উত্তর
+          const transcript = await transcribeAudio(audio.payload && audio.payload.url);
+          if (transcript) {
+            addMessage(conv.id, 'customer', '🎤 ' + transcript);
+            if (conv.ai_enabled) {
+              const reply = await generateReply(conv.id);
+              if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
+            }
+          } else {
+            addMessage(conv.id, 'customer', '🎤 [ভয়েস মেসেজ — শোনা যায়নি]');
+            if (conv.ai_enabled) {
+              const t = 'দুঃখিত, ভয়েস মেসেজটা ঠিক শুনতে পারিনি। কষ্ট করে একটু লিখে পাঠাবেন?';
+              addMessage(conv.id, 'ai', t); await sendMessage(psid, t);
+            }
+          }
+        } else if (image) {
+          // ছবি: AI ছবি দেখে ক্যাটালগের সাথে মিলিয়ে উত্তর দেবে
+          addMessage(conv.id, 'customer', '📷 [ছবি পাঠিয়েছেন]');
+          if (conv.ai_enabled) {
+            const reply = await generateImageReply(image.payload && image.payload.url);
+            const t = reply || 'ছবিটা পেয়েছি, কিন্তু ঠিক বুঝতে পারিনি। কোন প্রোডাক্টটা খুঁজছেন, নামটা একটু লিখে পাঠাবেন?';
+            addMessage(conv.id, 'ai', t); await sendMessage(psid, t);
+          }
         }
       }
     }
