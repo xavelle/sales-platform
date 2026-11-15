@@ -19,6 +19,20 @@ async function sendMessage(psid, text) {
   return res.ok;
 }
 
+// Facebook মাঝে মাঝে একই মেসেজ একাধিকবার পাঠায় (সার্ভার ঘুমিয়ে থাকলে retry হয়)।
+// mid দেখে ডুপ্লিকেট আটকাই — এক মেসেজের উত্তর একবারই যাবে।
+const seenMids = new Set();
+function alreadySeen(mid) {
+  if (!mid) return false;
+  if (seenMids.has(mid)) return true;
+  seenMids.add(mid);
+  if (seenMids.size > 1000) {
+    const it = seenMids.values();
+    for (let i = 0; i < 500; i++) seenMids.delete(it.next().value);
+  }
+  return false;
+}
+
 async function receive(req, res) {
   res.status(200).send('EVENT_RECEIVED');
   try {
@@ -27,6 +41,7 @@ async function receive(req, res) {
     for (const entry of body.entry || []) {
       for (const ev of entry.messaging || []) {
         if (!ev.message || ev.message.is_echo) continue;
+        if (alreadySeen(ev.message.mid)) continue;
         const psid = ev.sender.id, text = ev.message.text;
         if (!text) continue;
         const customer = findOrCreateCustomer('messenger', String(psid));
