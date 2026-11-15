@@ -141,4 +141,55 @@ async function generateReply(conversation_id) {
   return demoBrain(lastCustomer.text, history);
 }
 
-module.exports = { generateReply, businessContext };
+/* ---------- ছবি বোঝা: কাস্টমারের পাঠানো ছবি ক্যাটালগের সাথে মেলানো ---------- */
+function imagePrompt() {
+  return `You are the sales assistant of this shop. A customer sent a photo in chat. Use ONLY this business info:\n${businessContext()}\nTASK: Look at the photo carefully.
+- If it shows a product that matches the Products list above (type/color/design), reply with that product's exact name, price and stock, and ask if they want to order it.
+- If it shows a similar product that is NOT in the list, clearly say this exact design is not in our collection, then name the closest listed products with their prices.
+- If it is a payment (bKash/Nagad) screenshot, thank them and say our team will confirm the payment very soon.
+- Otherwise, briefly say what the photo shows and ask how you can help.
+Reply SHORT (1-3 lines), warm, in Bangla. NEVER invent a price or a product that is not in the Products list.`;
+}
+
+async function tryGeminiVision(imageUrl, model) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  try {
+    const imgRes = await fetchWithTimeout(imageUrl, {}, 20000);
+    if (!imgRes.ok) return null;
+    const mime = (imgRes.headers.get('content-type') || 'image/jpeg').split(';')[0];
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+    const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: imagePrompt() }, { inline_data: { mime_type: mime, data: buf.toString('base64') } }] }] })
+    });
+    if (!res.ok) { console.error('[ai] gemini vision HTTP', res.status, model); return null; }
+    const data = await res.json();
+    const t = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    return t ? t.trim() : null;
+  } catch (e) { console.error('[ai] gemini vision error', e.message, model); return null; }
+}
+
+async function tryOpenAIVision(imageUrl) {
+  const key = process.env.GITHUB_MODELS_TOKEN;
+  if (!key) return null;
+  try {
+    const res = await fetchWithTimeout('https://models.github.ai/inference/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({ model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: [{ type: 'text', text: imagePrompt() }, { type: 'image_url', image_url: { url: imageUrl } }] }] })
+    });
+    if (!res.ok) { console.error('[ai] gpt vision HTTP', res.status); return null; }
+    const data = await res.json();
+    const t = data?.choices?.[0]?.message?.content;
+    return t ? t.trim() : null;
+  } catch (e) { console.error('[ai] gpt vision error', e.message); return null; }
+}
+
+async function generateImageReply(imageUrl) {
+  if (!imageUrl) return null;
+  return (await tryGeminiVision(imageUrl, 'gemini-3.8-flash'))
+      || (await tryOpenAIVision(imageUrl))
+      || (await tryGeminiVision(imageUrl, 'gemini-3.5-flash-lite'));
+}
+
+module.exports = { generateReply, generateImageReply, businessContext };
