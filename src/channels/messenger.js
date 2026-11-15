@@ -3,6 +3,7 @@
 const { db, getSetting, findOrCreateCustomer, findOrCreateConversation, addMessage } = require('../db');
 const { generateReply, generateImageReply } = require('../ai');
 const { transcribeAudio } = require('../media');
+const { getWebsiteProducts } = require('../website');
 
 function verify(req, res) {
   const mode = req.query['hub.mode'], token = req.query['hub.verify_token'], challenge = req.query['hub.challenge'];
@@ -46,10 +47,22 @@ function alreadySeenPostback(psid, payload, ts) {
 }
 
 /* ---------- মেনু / রেডি প্রশ্নের নির্দিষ্ট উত্তর (লাইভ ডাটা থেকে, AI-এর আন্দাজে নয়) ---------- */
-function productListText() {
+// প্রোডাক্ট তালিকা — ওয়েবসাইটের লাইভ ক্যাটালগ থেকে (স্টকের সংখ্যা কখনো দেখানো হয় না, শুধু "সীমিত"/"শেষ")
+async function productListText() {
+  const site = await getWebsiteProducts();
+  if (site && site.length) {
+    if (site.length <= 8) {
+      const lines = site.map(p => p.inStock ? `• ${p.nameEn} (${p.nameBn}) — ৳${p.price} (স্টক সীমিত)` : `• ${p.nameEn} (${p.nameBn}) — ৳${p.price} (স্টক শেষ)`);
+      return `আমাদের প্রোডাক্টসমূহ:\n${lines.join('\n')}\nঅর্ডার করতে প্রোডাক্টের নাম লিখে পাঠান।`;
+    }
+    const counts = {};
+    for (const p of site) { const c = p.category || 'অন্যান্য'; counts[c] = (counts[c] || 0) + 1; }
+    const catLines = Object.entries(counts).map(([c, n]) => `${c} ${n}টি`).join(' · ');
+    return `আমাদের ওয়েবসাইটে এখন ${site.length}টি প্রোডাক্ট আছে — ${catLines}।\nযেকোনো প্রোডাক্টের নাম লিখলেই দাম আর সাইজ বলে দিচ্ছি। পুরো ক্যাটালগ: ${getSetting('website', 'https://xavelle.github.io/xavelle/')}`;
+  }
   const products = db.prepare('SELECT name, price, stock FROM products ORDER BY id').all();
   if (!products.length) return 'এখন নতুন কালেকশন আসছে — শীঘ্রই প্রোডাক্ট দেখতে পারবেন! কী ধরনের ডিজাইন খুঁজছেন, জানালে এসে গেলেই জানিয়ে দেব।';
-  const lines = products.map(p => p.stock > 0 ? `• ${p.name} — ৳${p.price} (স্টকে আছে)` : `• ${p.name} — ৳${p.price} (স্টক শেষ)`);
+  const lines = products.map(p => p.stock > 0 ? `• ${p.name} — ৳${p.price} (স্টক সীমিত)` : `• ${p.name} — ৳${p.price} (স্টক শেষ)`);
   return `আমাদের প্রোডাক্টসমূহ:\n${lines.join('\n')}\nঅর্ডার করতে প্রোডাক্টের নাম লিখে পাঠান।`;
 }
 function deliveryText() {
@@ -81,7 +94,7 @@ async function handlePostback(psid, payload) {
   if (payload === 'GET_STARTED') {
     reply = `${getSetting('greeting', 'আসসালামু আলাইকুম! Xavelle-এ স্বাগতম')} 😊\nপণ্য, দাম, ডেলিভারি বা অর্ডার নিয়ে সরাসরি লিখুন — অথবা নিচের মেনু থেকে বেছে নিন।`;
   } else if (payload === 'MENU_PRODUCTS') {
-    reply = productListText();
+    reply = await productListText();
   } else if (payload === 'ICE_DELIVERY') {
     reply = deliveryText();
   } else if (payload === 'ICE_ORDER') {
