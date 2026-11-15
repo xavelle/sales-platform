@@ -1,6 +1,7 @@
 // Website chat channel - embeddable widget posts here.
 const { findOrCreateCustomer, findOrCreateConversation, addMessage } = require('../db');
 const { generateReply } = require('../ai');
+const { handleCartMessage } = require('../cart');
 
 async function handleWebchat({ session_id, name, text }) {
   if (!session_id || !text) throw new Error('session_id and text required');
@@ -9,7 +10,8 @@ async function handleWebchat({ session_id, name, text }) {
   addMessage(conv.id, 'customer', text);
   let reply = null;
   if (conv.ai_enabled) {
-    reply = await generateReply(conv.id);
+    reply = await handleCartMessage(conv.id, text);
+    if (!reply) reply = await generateReply(conv.id);
     if (reply) addMessage(conv.id, 'ai', reply);
   }
   return { reply, conversation_id: conv.id };

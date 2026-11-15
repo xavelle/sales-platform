@@ -4,6 +4,7 @@ const { db, getSetting, findOrCreateCustomer, findOrCreateConversation, addMessa
 const { generateReply, generateImageReply } = require('../ai');
 const { transcribeAudio } = require('../media');
 const { getWebsiteProducts } = require('../website');
+const { handleCartMessage } = require('../cart');
 
 function verify(req, res) {
   const mode = req.query['hub.mode'], token = req.query['hub.verify_token'], challenge = req.query['hub.challenge'];
@@ -144,11 +145,14 @@ async function receive(req, res) {
           const prevCust = db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND sender = 'customer' ORDER BY id DESC LIMIT 1").get(conv.id);
           addMessage(conv.id, 'customer', ev.message.text);
           if (conv.ai_enabled) {
-            let reply = null;
-            const imgUrl = lastImageByConv.get(conv.id);
-            // ঠিক আগের মেসেজটা ছবি হলে, এই প্রশ্নটা ওই ছবি নিয়েই — ছবি দেখে উত্তর
-            if (imgUrl && prevCust && prevCust.text.startsWith('📷')) {
-              reply = await generateImageReply(imgUrl, ev.message.text, true);
+            // হিসাবের ব্যাপার হলে কোডে তৈরি সঠিক বিলটাই যাবে, AI আন্দাজে যোগ করবে না
+            let reply = await handleCartMessage(conv.id, ev.message.text);
+            if (!reply) {
+              const imgUrl = lastImageByConv.get(conv.id);
+              // ঠিক আগের মেসেজটা ছবি হলে, এই প্রশ্নটা ওই ছবি নিয়েই — ছবি দেখে উত্তর
+              if (imgUrl && prevCust && prevCust.text.startsWith('📷')) {
+                reply = await generateImageReply(imgUrl, ev.message.text, true);
+              }
             }
             if (!reply) reply = await generateReply(conv.id);
             if (reply) { addMessage(conv.id, 'ai', reply); await sendMessage(psid, reply); }
