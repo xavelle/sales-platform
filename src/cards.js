@@ -75,26 +75,36 @@ async function matchCardsForText(rawText) {
   if (text.length < 2) return null;
   const ps = await catalog();
   if (!ps.length) return null;
+  let categoryHit = false;
   for (const cw of CAT_WORDS) {
     if (cw.keys.some(k => text.includes(k))) {
+      categoryHit = true;
       const items = ps.filter(p => cw.re.test(haystack(p))).slice(0, 5);
       if (items.length) return items;
     }
   }
-  // নির্দিষ্ট প্রোডাক্ট: পুরো নাম, অথবা একমাত্র-মালিকের আলাদা শব্দ
+  // চাওয়া ক্যাটাগরি সাইটে নেই (লুকানো) — অন্য প্রোডাক্টের কার্ড চাপিয়ে দেওয়া হবে না
+  if (categoryHit) return null;
+  // নির্দিষ্ট প্রোডাক্ট: পুরো নাম, অথবা একমাত্র-মালিকের আলাদা শব্দ (বাংলা/English দুটোই)
+  const STOPW = ['premium', 'classic', 'the', 'for', 'with'];
+  const wordsOf = p => {
+    const en = (p.nameEn || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2 && !STOPW.includes(w));
+    const bn = (p.nameBn || '').split(/[\s()]+/).filter(w => w.length > 1 && !STOPW.includes(w));
+    return [...new Set([...en, ...bn])];
+  };
   const owners = new Map();
-  for (const p of ps) {
-    const words = `${p.nameEn || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2 && !['premium', 'classic', 'the', 'for', 'with'].includes(w));
-    for (const w of words) { if (!owners.has(w)) owners.set(w, []); owners.get(w).push(p.id); }
-  }
+  for (const p of ps) for (const w of wordsOf(p)) { if (!owners.has(w)) owners.set(w, []); owners.get(w).push(p.id); }
+  const inText = w => /^[a-z0-9]+$/.test(w) ? new RegExp(`\\b${w}\\b`).test(text) : text.includes(w);
   const matched = [];
   for (const p of ps) {
     const en = (p.nameEn || '').toLowerCase(), bn = p.nameBn || '';
     if ((en && text.includes(en)) || (bn && text.includes(bn))) { matched.push(p); continue; }
-    const words = `${p.nameEn || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
-    if (words.some(w => (owners.get(w) || []).length === 1 && new RegExp(`\\b${w}\\b`).test(text))) matched.push(p);
+    if (wordsOf(p).some(w => (owners.get(w) || []).length === 1 && inText(w))) matched.push(p);
   }
-  return matched.length === 1 ? matched : null;
+  if (matched.length === 1) return matched;
+  // "কী কী প্রোডাক্ট আছে / সবগুলো দেখাও" — সাইটে যা আছে সবগুলোর কার্ড (সর্বোচ্চ ১০)
+  if (/(কী কী|কি কি|সব প্রোডাক্ট|সবগুলো|সব গুলো|sob gulo|all product|প্রোডাক্ট আছে|product ase|product ache)/.test(text)) return ps.slice(0, 10);
+  return null;
 }
 
 module.exports = { cardElement, categoryList, productsOfCategory, findProduct, matchCardsForText, CAT_LABELS, bnNum };
